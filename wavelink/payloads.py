@@ -62,4 +62,4 @@ class TrackEventPayload:
         self.track: Playable = track
         self.player: Player = player
 
-        self.reason: str = data.get('reason')
+        self.reason: str | None = data.get('reason')

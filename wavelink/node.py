@@ -27,7 +27,7 @@ import logging
 import random
 import re
 import string
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, Type
 
 import aiohttp
 import discord
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from .ext import spotify as spotify_
 
     PlayableT = TypeVar('PlayableT', bound=Playable)
+    PlaylistT = TypeVar("PlaylistT", bound=Playlist)
     
 
 __all__ = ('Node', 'NodePool')
@@ -259,12 +260,15 @@ class Node:
             A list of found tracks converted to the provided cls.
         """
         data = await self._send(method='GET', path='loadtracks', query=f'identifier={query}')
-        load_type = try_enum(LoadType, data.get("loadType"))
+        if not data:
+            raise ValueError('Track failed to load.')
+        else:
+            load_type = try_enum(LoadType, data.get("loadType"))
 
         if load_type is LoadType.load_failed:
             # TODO - Proper Exception...
 
-            raise ValueError('Track Failed to load.')
+            raise ValueError('Track failed to load.')
 
         if load_type is LoadType.no_matches:
             return []
@@ -276,11 +280,11 @@ class Node:
         if load_type is not LoadType.search_result:
             # TODO - Proper Exception...
 
-            raise ValueError('Track Failed to load.')
+            raise ValueError('Track failed to load.')
 
         return [cls(track_data) for track_data in data["tracks"]]
 
-    async def get_playlist(self, cls: Playlist, query: str):
+    async def get_playlist(self, cls: Type[PlaylistT], query: str) -> PlaylistT | None:
         """|coro|
 
         Search for and return a :class:`tracks.Playlist` given an identifier.
@@ -305,6 +309,9 @@ class Node:
             An unspecified error occurred when loading the playlist.
         """
         data = await self._send(method='GET', path='loadtracks', query=f'identifier={query}')
+
+        if data is None:
+            raise ValueError('Tracks failed to load.')
 
         load_type = try_enum(LoadType, data.get("loadType"))
 
@@ -333,11 +340,12 @@ class Node:
             The Tracks unique encoded string.
         """
         data = await self._send(method='GET', path='decodetrack', query=f'encodedTrack={encoded}')
+        if data is None:
+            raise ValueError('Track failed to load.')
+        
+        return cls(data=data) # type: ignore
 
-        return cls(data=data)
 
-
-# noinspection PyShadowingBuiltins
 class NodePool:
     """The Wavelink NodePool is responsible for keeping track of all :class:`Node`.
 
@@ -458,7 +466,7 @@ class NodePool:
                          query: str,
                          /,
                          *,
-                         cls: type[PlayableT],
+                         cls: Type[PlayableT],
                          node: Node | None = None
                          ) -> list[PlayableT]:
         """|coro|
@@ -490,9 +498,9 @@ class NodePool:
                            query: str,
                            /,
                            *,
-                           cls: Playlist,
+                           cls: Type[PlaylistT],
                            node: Node | None = None
-                           ) -> Playlist:
+                           ) -> PlaylistT | None:
         """|coro|
 
         Helper method to retrieve a playlist from the NodePool without fetching a :class:`Node`.
@@ -515,7 +523,7 @@ class NodePool:
 
         Returns
         -------
-        Playlist
+        Playlist | ``None``
             A Playlist with its tracks.
         """
         if not node:

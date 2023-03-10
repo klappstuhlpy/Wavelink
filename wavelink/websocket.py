@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Optional
-
+from discord.utils import MISSING
 import aiohttp
 
 import wavelink
@@ -91,7 +91,7 @@ class Websocket:
         self.node._status = NodeStatus.CONNECTING
 
         try:
-            self._listener_task.cancel()
+            self._listener_task.cancel() # type: ignore
         except Exception as e:
             logger.debug(f'An error was raised while cancelling the websocket listener. {e}')
 
@@ -136,7 +136,7 @@ class Websocket:
         await self.connect()
 
     async def _listen(self) -> None:
-        while True:
+        while self.socket and not self.socket.closed:
             message = await self.socket.receive()
 
             if message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
@@ -173,7 +173,7 @@ class Websocket:
                 self.dispatch('node_ready', self.node)
 
             elif op == 'stats':
-                payload = ...
+                payload = MISSING
                 logger.debug(f'Stats Update: {data}')
                 self.dispatch('stats_update', data)
 
@@ -223,17 +223,16 @@ class Websocket:
         return self.node.players.get(int(payload['guildId']), None)
 
     def dispatch(self, event, *args: Any, **kwargs: Any) -> None:
-        self.node.client.dispatch(f"wavelink_{event}", *args, **kwargs)
+        if self.node.client:
+            self.node.client.dispatch(f"wavelink_{event}", *args, **kwargs)
 
     # noinspection PyBroadException
     async def cleanup(self) -> None:
-        try:
+        if self.socket:
             await self.socket.close()
-        except AttributeError:
-            pass
 
         try:
-            self._listener_task.cancel()
+            self._listener_task.cancel() # type: ignore
         except Exception:
             pass
 

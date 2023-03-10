@@ -28,16 +28,16 @@ import base64
 import enum
 import re
 import time
-from typing import Any, List, Optional, Type, TypeVar, Union, TYPE_CHECKING
+from typing import Any, List, Optional, Type, TypeVar, Union, TYPE_CHECKING, overload, Literal
 
 import aiohttp
 from discord.ext import commands
 
-import wavelink
 from wavelink import Node, NodePool
 
 if TYPE_CHECKING:
     from wavelink import Player, Playable
+    from typing_extensions import Self
 
 
 __all__ = ('SpotifySearchType',
@@ -118,20 +118,21 @@ class SpotifySearchType(enum.Enum):
 
 class SpotifyAsyncIterator:
 
-    def __init__(self, *, query: str, limit: int, type: SpotifySearchType, node: Node):
-        self._query = query
-        self._limit = limit
-        self._type = type
-        self._node = node
+    def __init__(self, *, query: str, limit: int | None, type: SpotifySearchType, node: Node):
+        self._query: str = query
+        self._limit: int | None = limit
+        self._type: SpotifySearchType = type
+        self._node: Node = node
 
-        self._first = True
-        self._count = 0
-        self._queue = asyncio.Queue()
+        self._first: bool = True
+        self._count: int = 0
+        self._queue: asyncio.Queue = asyncio.Queue()
 
     def __aiter__(self):
         return self
 
     async def fill_queue(self):
+        assert self._node._spotify, "No spotify connection attached to node"
         tracks = await self._node._spotify._search(query=self._query, iterator=True, type=self._type)
 
         for track in tracks:
@@ -228,16 +229,40 @@ class SpotifyTrack:
 
     def __eq__(self, other) -> bool:
         return self.id == other.id
+    
+    @overload
+    @classmethod
+    async def search(
+        cls: Type[Self],
+        query: str,
+        *,
+        type: SpotifySearchType = SpotifySearchType.track,
+        node: Node | None = None,
+        return_first: Literal[False]
+    ) -> list[Self]:
+        ...
+    
+    @overload
+    @classmethod
+    async def search(
+        cls: Type[Self],
+        query: str,
+        *,
+        type: SpotifySearchType = SpotifySearchType.track,
+        node: Node | None = None,
+        return_first: Literal[True]
+    ) -> Self:
+        ...
 
     @classmethod
     async def search(
-        cls: Type[ST],
+        cls: Type[Self],
             query: str,
             *,
             type: SpotifySearchType = SpotifySearchType.track,
             node: Node | None = None,
             return_first: bool = False,
-    ) -> Union[Optional[ST], List[ST]]:
+    ) -> Union[Optional[Self], List[Self]]:
         """|coro|
 
         Search for tracks with the given query.
@@ -258,13 +283,16 @@ class SpotifyTrack:
         Union[Optional[Track], List[Track]]
         """
         if node is None:
-            node: Node = NodePool.get_connected_node()
+            node = NodePool.get_connected_node()
+        
+        assert node._spotify is not None, "Node does not have a spotify connection"
 
         if type == SpotifySearchType.track:
-            tracks = await node._spotify._search(query=query, type=type)
+            tracks = await node._spotify._search(query=query, type=type, iterator=True)
 
             return tracks[0] if return_first else tracks
-        return await node._spotify._search(query=query, type=type)
+        
+        return await node._spotify._search(query=query, type=type, iterator=not return_first) # type: ignore
 
     @classmethod
     def iterator(cls,
@@ -307,19 +335,19 @@ class SpotifyTrack:
         return SpotifyAsyncIterator(query=query, limit=limit, node=node, type=type)
 
     @classmethod
-    async def convert(cls: Type[ST], ctx: commands.Context, argument: str) -> ST:
+    async def convert(cls: Type[Self], ctx: commands.Context, argument: str) -> Self:
         """Converter which searches for and returns the first track.
 
         Used as a type hint in a discord.py command.
         """
-        results = await cls.search(argument)
+        results = await cls.search(argument, return_first=True)
 
         if not results:
             raise commands.BadArgument("Could not find any songs matching that query.")
 
-        return results[0]
+        return results
 
-    async def fulfill(self, *, player: Player, cls: Playable, populate: bool) -> Playable:
+    async def fulfill(self, *, player: Player, cls: Type[Playable], populate: bool) -> Playable:
         """
         Parameters
         ----------
@@ -382,7 +410,7 @@ class SpotifyClient:
         self.session = aiohttp.ClientSession()
 
         self._bearer_token: str = None  # type: ignore
-        self._expiry: int = 0
+        self._expiry: float = 0
 
     @property
     def grant_headers(self) -> dict:
@@ -402,6 +430,14 @@ class SpotifyClient:
             data = await resp.json()
             self._bearer_token = data['access_token']
             self._expiry = time.time() + (int(data['expires_in']) - 10)
+
+    @overload
+    async def _search(self, query: str, type: SpotifySearchType = SpotifySearchType.track, iterator: Literal[True] = True) -> list[SpotifyTrack]:
+        ...
+    
+    @overload
+    async def _search(self, query: str, type: SpotifySearchType = SpotifySearchType.track, iterator: Literal[False] = False) -> SpotifyTrack:
+        ...
 
     async def _search(self,
                       query: str,
@@ -476,3 +512,6 @@ class SpotifyClient:
             else:
                 tracks = data['tracks']['items']
                 return [SpotifyTrack(t) for t in tracks]
+        
+        else:
+            raise RuntimeError(f"Unknown value $.type: {data['type']}")

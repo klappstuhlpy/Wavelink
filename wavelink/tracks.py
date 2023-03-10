@@ -183,7 +183,7 @@ class Playable(metaclass=abc.ABCMeta):
                      *,
                      return_first: bool = False,
                      node: Node | None = None
-                     ) -> Self | list[Self]:
+                     ) -> Self | list[Self] | None:
         """Search and retrieve tracks for the given query.
 
         Parameters

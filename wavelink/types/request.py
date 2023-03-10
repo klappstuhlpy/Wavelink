@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict, Any
 
 from .state import VoiceState
 
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
+from typing_extensions import NotRequired
 
 
 class Filters(TypedDict):
@@ -13,13 +12,13 @@ class Filters(TypedDict):
 
 
 class _BaseRequest(TypedDict, total=False):
-    voice: VoiceState
-    position: int
-    endTime: int
-    volume: int
-    paused: bool
-    filters: Filters
-    voice: VoiceState
+    voice: NotRequired[VoiceState]
+    position: NotRequired[int | float]
+    endTime: NotRequired[int]
+    volume: NotRequired[int]
+    paused: NotRequired[bool]
+    filters: NotRequired[dict[str, Any]]
+    voice: NotRequired[VoiceState]
 
 
 class EncodedTrackRequest(_BaseRequest):
@@ -30,4 +29,4 @@ class IdentifierRequest(_BaseRequest):
     identifier: str
 
 
-Request: TypeAlias = '_BaseRequest | EncodedTrackRequest | IdentifierRequest'
+Request = _BaseRequest | EncodedTrackRequest | IdentifierRequest
