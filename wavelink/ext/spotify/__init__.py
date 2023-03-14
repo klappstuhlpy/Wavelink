@@ -1,7 +1,7 @@
 """
 MIT License
 
-Copyright (c) 2019-Present PythonistaGuild
+Copyright (c) 2019-Present PythonistaGuild with modifications by Klappstuhl65
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 __all__ = ('SpotifySearchType',
            'SpotifyClient',
            'SpotifyTrack',
+           'SpotifyPlaylist',
+           'SpotifyAlbum',
+           'SpotifyArtist',
            'SpotifyRequestError',
            'decode_url')
 
@@ -175,6 +178,88 @@ class SpotifyRequestError(Exception):
         self.reason = reason
 
 
+class SpotifyAlbum:
+    __slots__ = ("data", "id", "name", "artists", "uri", "label", "popularity", "images", "genres", "tracks")
+
+    def __init__(self, data: dict[str, Any], tracks: list[SpotifyTrack]) -> None:
+        self.data = data
+
+        self.id: str = data["id"]
+        self.name: str = data["name"]
+        self.artists: list[SpotifyArtist] = [SpotifyArtist(artist, []) for artist in data["artists"]]
+        self.uri: str
+
+        self.label: str = data["label"]
+        self.popularity: int = data["popularity"]
+        self.images: list[str] = [i["url"] for i in data["images"]]
+        self.genres: list[str] = data["genres"]
+
+        self.tracks = tracks
+
+        for track in self.tracks:
+            track.images = self.images
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def thumbnail(self) -> str | None:
+        return None if not self.images else self.images[0]
+
+
+class SpotifyPlaylist:
+    __slots__ = ("data", "id", "name", "owner", "uri", "description", "followers", "images", "tracks")
+
+    def __init__(self, data: dict[str, Any], tracks: list[SpotifyTrack]) -> None:
+        self.data = data
+
+        self.id: str = data["id"]
+        self.name: str = data["name"]
+        self.owner: str | None = data["owner"]["display_name"]
+        self.uri: str = data["external_urls"]["spotify"]
+
+        self.description: str | None = data["description"]
+        self.followers: int | None = None if data.get("followers") is None else data["followers"]["total"]
+        self.images: list[str] = [i["url"] for i in data["images"]]
+
+        self.tracks = tracks
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def thumbnail(self) -> str | None:
+        return None if not self.images else self.images[0]
+
+
+class SpotifyArtist:
+    __slots__ = ("data", "id", "name", "uri", "followers", "popularity", "genres", "images", "tracks")
+
+    def __init__(self, data: dict[str, Any], tracks: list[dict[str, Any]]) -> None:
+        self.data = data
+
+        self.id: str = data["id"]
+        self.name: str = data["name"]
+        self.uri: str = data["external_urls"]["spotify"]
+
+        self.followers: int | None = None if data.get("followers") is None else data["followers"]["total"]
+        self.popularity: int | None = data.get("popularity", None)
+        self.genres: list[str] = data.get("genres", [])
+        self.images: list[str] = data.get("images", [])
+
+        self.tracks = [SpotifyTrack(track) for track in tracks]
+
+        for track in self.tracks:
+            track.images = self.images
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def thumbnail(self) -> str | None:
+        return None if not self.images else self.images[0]
+
+
 class SpotifyTrack:
     """A track retrieved via Spotify.
 
@@ -219,25 +304,45 @@ class SpotifyTrack:
 
         self.name: str = data['name']
         self.title: str = self.name
-        self.uri: str = data['uri']
+        self.uri: str = data["external_urls"]["spotify"]
         self.id: str = data['id']
         self.length: int = data['duration_ms']
         self.duration: int = self.length
 
-        self.isrc: str | None = data["external_ids"].get("isrc")
+        self._from_auto_queue: bool = False
 
-    def __eq__(self, other) -> bool:
-        return self.id == other.id
+        try:
+            self.isrc: str | None = data["external_ids"].get("isrc")
+        except KeyError:
+            pass
+
+    def __eq__(self, other) -> None:
+        try:
+            return self.id == other.id
+        except AttributeError:
+            return None
+
+    @property
+    def from_auto_queue(self) -> bool:
+        return self._from_auto_queue
+
+    @from_auto_queue.setter
+    def from_auto_queue(self, value: bool):
+        self._from_auto_queue = value
+
+    @property
+    def thumbnail(self) -> str | None:
+        return None if not self.images else self.images[0]
 
     @classmethod
     async def search(
-        cls: Type[ST],
+            cls: Type[ST],
             query: str,
             *,
             type: SpotifySearchType = SpotifySearchType.track,
             node: Node | None = None,
             return_first: bool = False,
-    ) -> Union[Optional[ST], List[ST]]:
+    ) -> SpotifyTrack | list[SpotifyTrack]:
         """|coro|
 
         Search for tracks with the given query.
@@ -258,7 +363,7 @@ class SpotifyTrack:
         Union[Optional[Track], List[Track]]
         """
         if node is None:
-            node: Node = NodePool.get_connected_node()
+            node: Node = wavelink.NodePool.get_connected_node()
 
         if type == SpotifySearchType.track:
             tracks = await node._spotify._search(query=query, type=type)
@@ -274,8 +379,7 @@ class SpotifyTrack:
                  type: SpotifySearchType = SpotifySearchType.playlist,
                  node: Node | None = None,
                  ):
-        """An async iterator version of search.
-
+        """
         This can be useful when searching for large playlists or albums with Spotify.
 
         Parameters
@@ -302,7 +406,7 @@ class SpotifyTrack:
             raise TypeError("Iterator search type must be either album or playlist.")
 
         if node is None:
-            node = NodePool.get_connected_node()
+            node = wavelink.NodePool.get_connected_node()
 
         return SpotifyAsyncIterator(query=query, limit=limit, node=node, type=type)
 
@@ -403,11 +507,24 @@ class SpotifyClient:
             self._bearer_token = data['access_token']
             self._expiry = time.time() + (int(data['expires_in']) - 10)
 
+    async def _request(self, url: str, params: dict[str, str | int] = {}) -> dict[str, Any]:
+        if not self._bearer_token or time.time() >= self._expiry:
+            await self._get_bearer_token()
+
+        async with self.session.get(url, headers=self.bearer_headers, params=params) as response:
+            if not response.ok:
+                print(response.real_url)
+                raise SpotifyRequestError(response.status, str(response.reason))
+
+            data = await response.json()
+
+        return data
+
     async def _search(self,
                       query: str,
                       type: SpotifySearchType = SpotifySearchType.track,
                       iterator: bool = False,
-                      ) -> SpotifyTrack | list[SpotifyTrack]:
+                      ) -> SpotifyTrack | SpotifyPlaylist | SpotifyArtist | SpotifyAlbum:
 
         if not self._bearer_token or time.time() >= self._expiry:
             await self._get_bearer_token()
@@ -429,23 +546,12 @@ class SpotifyClient:
 
         if data['type'] == 'track':
             return SpotifyTrack(data)
-
         elif data['type'] == 'album':
-            album_data: dict[str, Any]= {
-                                        'album_type': data['album_type'],
-                                        'artists': data['artists'],
-                                        'available_markets': data['available_markets'],
-                                        'external_urls': data['external_urls'],
-                                        'href': data['href'],
-                                        'id': data['id'],
-                                        'images': data['images'],
-                                        'name': data['name'],
-                                        'release_date': data['release_date'],
-                                        'release_date_precision': data['release_date_precision'],
-                                        'total_tracks': data['total_tracks'],
-                                        'type': data['type'],
-                                        'uri': data['uri'],
-                                        }
+            album_data: dict[str, Any] = {
+                'images': data['images'],
+                'name': data['name'],
+            }
+
             tracks = []
             for track in data['tracks']['items']:
                 track['album'] = album_data
@@ -454,25 +560,22 @@ class SpotifyClient:
                 else:
                     tracks.append(SpotifyTrack(track))
 
-            return tracks
+            return SpotifyAlbum(data, tracks)
+        elif data["type"] == "artist":
+            tracks = (await self._request(f"{url}/top-tracks?market=US"))["tracks"]
 
-        elif data['type'] == 'playlist':
-            if iterator:
-                if not data['tracks']['next']:
-                    return [t['track'] for t in data['tracks']['items']]
+            return SpotifyArtist(data, tracks)
+        else:
 
-                url = data['tracks']['next']
+            tracks = [SpotifyTrack(t["track"]) for t in data["tracks"]["items"]]
 
-                items = [t['track'] for t in data['tracks']['items']]
-                while True:
-                    async with self.session.get(url, headers=self.bearer_headers) as resp:
-                        data = await resp.json()
+            next_page_url: str | None = data["tracks"]["next"]
 
-                        items.extend([t['track'] for t in data['items']])
-                        if not data['next']:
-                            return items
+            while next_page_url is not None and len(tracks) < 500:
+                next_page = await self._request(next_page_url)
 
-                        url = data['next']
-            else:
-                tracks = data['tracks']['items']
-                return [SpotifyTrack(t) for t in tracks]
+                next_page_url = next_page["next"]
+
+                tracks.extend(SpotifyTrack(t["track"]) for t in next_page["items"])
+
+            return SpotifyPlaylist(data, tracks)
